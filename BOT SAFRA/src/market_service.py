@@ -495,6 +495,94 @@ class MarketService:
             raise RuntimeError("Falha ao criar o ativo.")
         return created
 
+    def delete_asset(self, code: str, tipo: str) -> sqlite3.Row:
+        tipo = tipo.strip().lower()
+        asset = self.get_asset(code, tipo)
+        if asset is None:
+            raise ValueError("Ativo nao encontrado nesse mercado.")
+        with self.database._get_connection() as connection:
+            # remove wallets entries
+            table = self._wallet_table(tipo)
+            connection.execute(f"DELETE FROM {table} WHERE code = ?", (asset["code"],))
+            # remove history and asset
+            connection.execute("DELETE FROM market_history WHERE code = ?", (asset["code"],))
+            connection.execute("DELETE FROM market_assets WHERE code = ? AND tipo = ?", (asset["code"], tipo))
+            connection.commit()
+        return asset
+
+    def add_asset_to_user(self, user_id: int, tipo: str, code: str, quantity: float) -> dict[str, object]:
+        tipo_key = tipo.strip().lower()
+        if tipo_key not in {"stock", "crypto"}:
+            raise ValueError("Tipo de investimento invalido.")
+        if not self._valid_positive(quantity):
+            raise ValueError("A quantidade deve ser maior que zero.")
+
+        asset = self._require_asset(code, tipo_key)
+        table = self._wallet_table(tipo_key)
+        now = self._now()
+        with self.database._get_connection() as connection:
+            wallet = self._get_wallet_row(connection, table, user_id, asset["code"])
+            old_quantity = float(wallet["quantity"]) if wallet else 0.0
+            old_average = float(wallet["average_price"]) if wallet else 0.0
+            new_quantity = round(old_quantity + float(quantity), 8)
+            # set average price to current asset price for admin grants
+            new_average = float(asset["price"]) if new_quantity > 0 else 0.0
+            connection.execute(
+                f"""
+                INSERT INTO {table} (user_id, code, quantity, average_price)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, code) DO UPDATE SET
+                    quantity = excluded.quantity,
+                    average_price = excluded.average_price
+                """,
+                (user_id, asset["code"], new_quantity, new_average),
+            )
+            self._log_transaction(connection, user_id, tipo_key, "admin_add", asset["code"], float(quantity), float(asset["price"]), 0.0, now)
+            connection.commit()
+
+        return {"asset": asset, "added": float(quantity), "new_quantity": new_quantity}
+
+    def reset_user_asset(self, user_id: int, tipo: str, code: str) -> dict[str, object]:
+        tipo_key = tipo.strip().lower()
+        if tipo_key not in {"stock", "crypto"}:
+            raise ValueError("Tipo de investimento invalido.")
+        asset = self._require_asset(code, tipo_key)
+        table = self._wallet_table(tipo_key)
+        now = self._now()
+        with self.database._get_connection() as connection:
+            wallet = self._get_wallet_row(connection, table, user_id, asset["code"])
+            if wallet is None:
+                return {"asset": asset, "removed": 0.0, "remaining": 0.0}
+            removed = float(wallet["quantity"])
+            connection.execute(f"DELETE FROM {table} WHERE user_id = ? AND code = ?", (user_id, asset["code"]))
+            self._log_transaction(connection, user_id, tipo_key, "reset", asset["code"], removed, float(asset["price"]), 0.0, now)
+            connection.commit()
+        return {"asset": asset, "removed": removed, "remaining": 0.0}
+
+    def adjust_price(self, tipo: str, code: str, new_price: float) -> sqlite3.Row:
+        tipo_key = tipo.strip().lower()
+        if tipo_key not in {"stock", "crypto"}:
+            raise ValueError("Tipo de ativo invalido.")
+        if not self._valid_positive(new_price):
+            raise ValueError("Preco deve ser maior que zero.")
+        asset = self._require_asset(code, tipo_key)
+        now = self._now()
+        previous = float(asset["price"])
+        change_percent = round(((float(new_price) - previous) / previous) * 100, 2) if previous > 0 else 0.0
+        with self.database._get_connection() as connection:
+            connection.execute(
+                """
+                UPDATE market_assets
+                SET previous_price = ?, price = ?, daily_change = ?, market_cap = ?, updated_at = ?
+                WHERE code = ?
+                """,
+                (previous, round(float(new_price), 2), change_percent, round(float(new_price) * float(asset["supply"]), 2), now, asset["code"]),
+            )
+            self._insert_history(connection, asset["code"], tipo_key, round(float(new_price), 2), change_percent, "Ajuste manual de preco", now)
+            connection.commit()
+
+        return self.get_asset(asset["code"], tipo_key)
+
     def list_wallet(self, user_id: int, tipo: str) -> list[sqlite3.Row]:
         table = self._wallet_table(tipo)
         with self.database._get_connection() as connection:

@@ -2101,6 +2101,133 @@ class BancoSafraBot(commands.Bot):
                 color=0x1E8E5A,
             )
 
+        @acoes_group.command(
+            name="excluir",
+            description="Admin: exclui uma acao existente da bolsa Safra.",
+        )
+        @app_commands.allowed_contexts(guilds=True, dms=False, private_channels=False)
+        @app_commands.allowed_installs(guilds=True, users=False)
+        @app_commands.check(self.is_admin_authorized)
+        async def acoes_excluir(
+            interaction: discord.Interaction,
+            codigo: str,
+        ) -> None:
+            await self._defer_if_needed(interaction, ephemeral=True)
+            asset = self.market.delete_asset(codigo, "stock")
+            embed = make_bank_embed(
+                "🗑️ Ação excluída",
+                f"A ação **{asset['name']} ({asset['code']})** foi removida do mercado.",
+                color=0xB22222,
+            )
+            await self._reply_embed(interaction, embed, ephemeral=True)
+            await self.send_transaction_log(
+                title="🗑️ Ação excluída",
+                lines=[
+                    f"Admin: {interaction.user.mention}",
+                    f"Ativo removido: **{asset['name']} ({asset['code']})**",
+                ],
+                color=0xB22222,
+            )
+
+        @acoes_group.command(
+            name="reset",
+            description="Admin: reseta a quantidade de uma ação para usuario ou cargo (zera).",
+        )
+        @app_commands.allowed_contexts(guilds=True, dms=False, private_channels=False)
+        @app_commands.allowed_installs(guilds=True, users=False)
+        @app_commands.check(self.is_admin_authorized)
+        async def acoes_reset(
+            interaction: discord.Interaction,
+            codigo: str,
+            usuario: discord.Member | None = None,
+            cargo: discord.Role | None = None,
+        ) -> None:
+            targets = await self._resolve_target_members(interaction, usuario, cargo)
+            if targets is None:
+                return
+
+            total_removed = 0.0
+            for member in targets:
+                result = self.market.reset_user_asset(member.id, "stock", codigo)
+                total_removed += float(result.get("removed", 0.0))
+                await enviar_notificacao(
+                    self,
+                    member.id,
+                    "perda_investimento",
+                    f"📉 Seus {codigo.upper()} foram zerados por uma ação administrativa.",
+                )
+
+            target_label = cargo.mention if cargo is not None else usuario.mention if usuario is not None else "nenhum"
+            embed = self._build_action_embed(
+                title="🔄 Reset de ação",
+                color=0xB45F06,
+                lines=[
+                    f"🎯 Alvo: {target_label}",
+                    f"🧾 Ativo: **{codigo.upper()}**",
+                    f"➖ Quantidade total removida: **{total_removed:.8f}**",
+                ],
+            )
+            await self._reply_embed(interaction, embed, ephemeral=True)
+            await self.send_transaction_log(
+                title="🔄 Reset de ação",
+                lines=[
+                    f"Admin: {interaction.user.mention}",
+                    f"Alvo: {target_label}",
+                    f"Ativo: **{codigo.upper()}**",
+                    f"Quantidade total removida: **{total_removed:.8f}**",
+                ],
+                color=0xB45F06,
+            )
+
+        @acoes_group.command(
+            name="add",
+            description="Admin: adiciona ações para um usuario ou cargo (administrativo).",
+        )
+        @app_commands.allowed_contexts(guilds=True, dms=False, private_channels=False)
+        @app_commands.allowed_installs(guilds=True, users=False)
+        @app_commands.check(self.is_admin_authorized)
+        async def acoes_add(
+            interaction: discord.Interaction,
+            codigo: str,
+            quantidade: app_commands.Range[float, 0.00000001, None],
+            usuario: discord.Member | None = None,
+            cargo: discord.Role | None = None,
+        ) -> None:
+            targets = await self._resolve_target_members(interaction, usuario, cargo)
+            if targets is None:
+                return
+
+            for member in targets:
+                result = self.market.add_asset_to_user(member.id, "stock", codigo, float(quantidade))
+                await enviar_notificacao(
+                    self,
+                    member.id,
+                    "bonus",
+                    f"🎁 Você recebeu {quantidade} de {codigo.upper()} por ajuste administrativo.",
+                )
+
+            target_label = cargo.mention if cargo is not None else usuario.mention if usuario is not None else "nenhum"
+            embed = self._build_action_embed(
+                title="➕ Ações adicionadas",
+                color=0x137D3E,
+                lines=[
+                    f"🎯 Alvo: {target_label}",
+                    f"🧾 Ativo: **{codigo.upper()}**",
+                    f"➕ Quantidade por membro: **{float(quantidade):.8f}**",
+                ],
+            )
+            await self._reply_embed(interaction, embed, ephemeral=True)
+            await self.send_transaction_log(
+                title="➕ Ações adicionadas (admin)",
+                lines=[
+                    f"Admin: {interaction.user.mention}",
+                    f"Alvo: {target_label}",
+                    f"Ativo: **{codigo.upper()}**",
+                    f"Quantidade por membro: **{float(quantidade):.8f}**",
+                ],
+                color=0x137D3E,
+            )
+
         @crypto_group.command(
             name="criar",
             description="Admin: cria uma nova criptomoeda no mercado Safra.",
@@ -2144,6 +2271,170 @@ class BancoSafraBot(commands.Bot):
                     f"Preco inicial: **{format_currency(float(asset['price']))}**",
                 ],
                 color=0x8C6B00,
+            )
+
+        @crypto_group.command(
+            name="excluir",
+            description="Admin: exclui uma crypto existente do mercado Safra.",
+        )
+        @app_commands.allowed_contexts(guilds=True, dms=False, private_channels=False)
+        @app_commands.allowed_installs(guilds=True, users=False)
+        @app_commands.check(self.is_admin_authorized)
+        async def crypto_excluir(
+            interaction: discord.Interaction,
+            codigo: str,
+        ) -> None:
+            await self._defer_if_needed(interaction, ephemeral=True)
+            asset = self.market.delete_asset(codigo, "crypto")
+            embed = make_bank_embed(
+                "🗑️ Crypto excluída",
+                f"A moeda **{asset['name']} ({asset['code']})** foi removida do mercado.",
+                color=0xB22222,
+            )
+            await self._reply_embed(interaction, embed, ephemeral=True)
+            await self.send_transaction_log(
+                title="🗑️ Crypto excluída",
+                lines=[
+                    f"Admin: {interaction.user.mention}",
+                    f"Ativo removido: **{asset['name']} ({asset['code']})**",
+                ],
+                color=0xB22222,
+            )
+
+        @crypto_group.command(
+            name="reset",
+            description="Admin: reseta a quantidade de uma crypto para usuario ou cargo (zera).",
+        )
+        @app_commands.allowed_contexts(guilds=True, dms=False, private_channels=False)
+        @app_commands.allowed_installs(guilds=True, users=False)
+        @app_commands.check(self.is_admin_authorized)
+        async def crypto_reset(
+            interaction: discord.Interaction,
+            codigo: str,
+            usuario: discord.Member | None = None,
+            cargo: discord.Role | None = None,
+        ) -> None:
+            targets = await self._resolve_target_members(interaction, usuario, cargo)
+            if targets is None:
+                return
+
+            total_removed = 0.0
+            for member in targets:
+                result = self.market.reset_user_asset(member.id, "crypto", codigo)
+                total_removed += float(result.get("removed", 0.0))
+                await enviar_notificacao(
+                    self,
+                    member.id,
+                    "perda_investimento",
+                    f"📉 Seus {codigo.upper()} foram zerados por uma ação administrativa.",
+                )
+
+            target_label = cargo.mention if cargo is not None else usuario.mention if usuario is not None else "nenhum"
+            embed = self._build_action_embed(
+                title="🔄 Reset de crypto",
+                color=0xB45F06,
+                lines=[
+                    f"🎯 Alvo: {target_label}",
+                    f"🧾 Ativo: **{codigo.upper()}**",
+                    f"➖ Quantidade total removida: **{total_removed:.8f}**",
+                ],
+            )
+            await self._reply_embed(interaction, embed, ephemeral=True)
+            await self.send_transaction_log(
+                title="🔄 Reset de crypto",
+                lines=[
+                    f"Admin: {interaction.user.mention}",
+                    f"Alvo: {target_label}",
+                    f"Ativo: **{codigo.upper()}**",
+                    f"Quantidade total removida: **{total_removed:.8f}**",
+                ],
+                color=0xB45F06,
+            )
+
+        @crypto_group.command(
+            name="add",
+            description="Admin: adiciona cryptos para um usuario ou cargo (administrativo).",
+        )
+        @app_commands.allowed_contexts(guilds=True, dms=False, private_channels=False)
+        @app_commands.allowed_installs(guilds=True, users=False)
+        @app_commands.check(self.is_admin_authorized)
+        async def crypto_add(
+            interaction: discord.Interaction,
+            codigo: str,
+            quantidade: app_commands.Range[float, 0.00000001, None],
+            usuario: discord.Member | None = None,
+            cargo: discord.Role | None = None,
+        ) -> None:
+            targets = await self._resolve_target_members(interaction, usuario, cargo)
+            if targets is None:
+                return
+
+            for member in targets:
+                result = self.market.add_asset_to_user(member.id, "crypto", codigo, float(quantidade))
+                await enviar_notificacao(
+                    self,
+                    member.id,
+                    "bonus",
+                    f"🎁 Você recebeu {quantidade} de {codigo.upper()} por ajuste administrativo.",
+                )
+
+            target_label = cargo.mention if cargo is not None else usuario.mention if usuario is not None else "nenhum"
+            embed = self._build_action_embed(
+                title="➕ Cryptos adicionadas",
+                color=0x137D3E,
+                lines=[
+                    f"🎯 Alvo: {target_label}",
+                    f"🧾 Ativo: **{codigo.upper()}**",
+                    f"➕ Quantidade por membro: **{float(quantidade):.8f}**",
+                ],
+            )
+            await self._reply_embed(interaction, embed, ephemeral=True)
+            await self.send_transaction_log(
+                title="➕ Cryptos adicionadas (admin)",
+                lines=[
+                    f"Admin: {interaction.user.mention}",
+                    f"Alvo: {target_label}",
+                    f"Ativo: **{codigo.upper()}**",
+                    f"Quantidade por membro: **{float(quantidade):.8f}**",
+                ],
+                color=0x137D3E,
+            )
+
+        @mercado_group.command(
+            name="ajustar",
+            description="Admin: ajusta manualmente o preco de um ativo (controle).",
+        )
+        @app_commands.allowed_contexts(guilds=True, dms=False, private_channels=False)
+        @app_commands.allowed_installs(guilds=True, users=False)
+        @app_commands.check(self.is_admin_authorized)
+        @app_commands.choices(
+            tipo=[
+                app_commands.Choice(name="Ações", value="stock"),
+                app_commands.Choice(name="Crypto", value="crypto"),
+            ]
+        )
+        async def mercado_ajustar(
+            interaction: discord.Interaction,
+            tipo: app_commands.Choice[str],
+            codigo: str,
+            novo_preco: app_commands.Range[float, 0.01, None],
+        ) -> None:
+            await self._defer_if_needed(interaction, ephemeral=True)
+            asset = self.market.adjust_price(tipo.value, codigo, float(novo_preco))
+            embed = make_bank_embed(
+                "⚙️ Preço ajustado",
+                f"O preço de **{asset['name']} ({asset['code']})** foi ajustado para **{format_currency(float(asset['price']))}**.",
+                color=0x0B4EA2,
+            )
+            await self._reply_embed(interaction, embed, ephemeral=True)
+            await self.send_transaction_log(
+                title="⚙️ Ajuste manual de preço",
+                lines=[
+                    f"Admin: {interaction.user.mention}",
+                    f"Ativo: **{asset['name']} ({asset['code']})**",
+                    f"Novo preço: **{format_currency(float(asset['price']))}**",
+                ],
+                color=0x0B4EA2,
             )
 
         @self.tree.command(
